@@ -1,91 +1,186 @@
-from flask import Flask, request, render_template_string
-from threading import Thread
-import os, uuid, time, requests
+from flask import Flask, request, render_template_string, flash, redirect, url_for
+import time
+import threading
+import requests
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-TOKENS_LOG = "tokens.txt"
+app.secret_key = "your_secret_key"
 
-HTML = """
-<!DOCTYPE html><html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>COMMENTS LOADER</title>
-<style>
- body{margin:0;padding:0;background:#000;color:#fff;font-family:Segoe UI, sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh}
- .box{width:95%;max-width:480px;background:rgba(255,255,255,.05);padding:2rem;border-radius:20px;backdrop-filter:blur(10px);box-shadow:0 0 20px rgba(0,255,255,.2)}
- h1{background:linear-gradient(90deg,#00f2fe,#ff6ec4,#f7971e);-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:center;font-size:1.6rem;margin-bottom:1.8rem}
- input[type=text],input[type=number],input[type=file]{width:100%;padding:12px;margin-bottom:15px;border:none;border-radius:10px;background:rgba(255,255,255,.1);color:#fff;outline:none}
- .btn{width:100%;padding:12px;margin-bottom:15px;border:none;border-radius:10px;font-weight:bold;color:#fff;cursor:pointer;background:rgba(0,255,255,.2);box-shadow:0 0 15px rgba(0,255,255,.4);transition:.3s}
- .btn:hover{background:rgba(0,255,255,.5);box-shadow:0 0 25px rgba(0,255,255,.9)}
- .count{color:#ccc;font-size:.85rem;text-align:center;margin:6px 0}
-</style>
-</head><body>
-<div class="box">
- <h1>🚀SID-xD COMMENTS LOADER</h1>
- <form method="post" enctype="multipart/form-data">
-  <input type="text" name="token" placeholder="🔑 EAAG Token" required>
-  <input type="text" name="post_id" placeholder="🆔 Facebook Post ID" required>
-  <input type="number" name="delay" placeholder="⏱️ Delay (seconds)" required>
-  <input type="file" name="comments_file" required>
-  <button class="btn" type="submit">Start Commenting</button>
-  <button class="btn" type="button" onclick="alert('Stopping not implemented. Just refresh page.')">Stop Commenting</button>
- </form>
- <div class="count">👥 Total Users: {{count}}</div>
-</div></body></html>
-"""
+# Global variable to control the stop button functionality
+stop_sending = False
 
-# Send comment to FB post
-def send_comment(token, post_id, comment):
-    url = f"https://graph.facebook.com/{post_id}/comments"
-    payload = {"message": comment, "access_token": token}
-    response = requests.post(url, data=payload)
-    if response.status_code == 200:
-        print(f"✅ Sent: {comment}")
-    else:
-        print(f"❌ Failed: {comment}")
-        print("📄 Response:", response.text)
+# HTML Template with a colorful background and stop button
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facebook Messenger Automation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(to right, #ff7e5f, #feb47b);
+            color: white;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .container {
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+        }
+        h1 {
+            text-align: center;
+            color: #ffcccb;
+        }
+        label {
+            display: block;
+            margin: 10px 0 5px;
+            font-weight: bold;
+        }
+        input, button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        input[type="text"], input[type="password"], input[type="number"], input[type="file"] {
+            background-color: #f0f0f0;
+        }
+        button {
+            background-color: #ff5f57;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #ff3b30;
+        }
+        .stop-btn {
+            background-color: #333;
+            color: white;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .stop-btn:hover {
+            background-color: #555;
+        }
+        .message {
+            text-align: center;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Messenger Automation</h1>
+        <form action="/" method="POST" enctype="multipart/form-data">
+            <label for="token">Facebook Token:</label>
+            <input type="text" id="token" name="token" placeholder="Paste your token here" required>
 
-# Background thread to post all comments
-def background_commenter(token, post_id, delay, comments):
-    for comment in comments:
-        send_comment(token, post_id, comment)
-        time.sleep(delay)
+            <label for="target_id">Target Group/Inbox ID:</label>
+            <input type="text" id="target_id" name="target_id" placeholder="Enter target chat ID" required>
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    if request.method == "POST":
-        token = request.form["token"].strip()
-        post_id = request.form["post_id"].strip()
-        delay = int(request.form["delay"].strip())
-        file = request.files["comments_file"]
-        ip = request.remote_addr
+            <label for="message_file">Message File (TXT):</label>
+            <input type="file" id="message_file" name="message_file" accept=".txt" required>
 
-        # Log token use
-        with open(TOKENS_LOG, "a") as f:
-            f.write(f"{token} | {ip}\n")
+            <label for="delay">Delay (in seconds):</label>
+            <input type="number" id="delay" name="delay" placeholder="Enter delay between messages" required>
 
-        # Save and read uploaded comments
-        fname = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.txt")
-        file.save(fname)
-        with open(fname, encoding="utf-8") as f:
-            comments = [line.strip() for line in f if line.strip()]
+            <button type="submit">Send Messages</button>
+        </form>
+        <form action="/stop" method="POST">
+            <button type="submit" class="stop-btn">Stop Sending</button>
+        </form>
+        {% with messages = get_flashed_messages(with_categories=True) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="message {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+        {% endwith %}
+    </div>
+</body>
+</html>
+'''
 
-        # Run in background
-        Thread(target=background_commenter, args=(token, post_id, delay, comments), daemon=True).start()
-
-        return render_template_string(
-            "<h2 style='color:white;text-align:center;margin-top:40vh;'>✔️ Comments started in background.<br><a href='/'>⬅️ Back</a></h2>"
-        )
-
+# Function to send messages in a thread
+def send_messages(token, target_id, messages, delay):
+    global stop_sending
+    stop_sending = False
     try:
-        with open(TOKENS_LOG) as f:
-            count = len(f.readlines())
-    except:
-        count = 0
+        for message in messages:
+            if stop_sending:
+                print("[INFO] Sending stopped by the user.")
+                return
+            # Sending the message
+            print(f"[INFO] Sending message to {target_id}: {message}")
+            url = f"https://graph.facebook.com/v16.0/{target_id}/messages"
+            payload = {"message": message}
+            headers = {"Authorization": f"Bearer {token}"}
+            response = requests.post(url, json=payload, headers=headers)
 
-    return render_template_string(HTML, count=count)
+            # Log response
+            if response.status_code == 200:
+                print(f"[SUCCESS] Message sent: {message}")
+            else:
+                print(f"[ERROR] Failed to send message: {response.text}")
+
+            time.sleep(delay)
+        print("[INFO] All messages sent successfully!")
+    except Exception as e:
+        print(f"[ERROR] Exception occurred: {e}")
+
+# Flask route for the main page
+@app.route("/", methods=["GET", "POST"])
+def home():
+    if request.method == "POST":
+        try:
+            # Get form data
+            token = request.form["token"]
+            target_id = request.form["target_id"]
+            delay = int(request.form["delay"])
+            message_file = request.files["message_file"]
+
+            # Read messages from the file
+            messages = message_file.read().decode("utf-8").splitlines()
+            if not messages:
+                flash("Message file is empty!", "error")
+                return redirect(url_for("home"))
+
+            # Start a thread to send messages
+            threading.Thread(target=send_messages, args=(token, target_id, messages, delay)).start()
+            flash("Messages are being sent!", "success")
+        except Exception as e:
+            flash(f"An error occurred: {e}", "error")
+
+    return render_template_string(HTML_TEMPLATE)
+
+# Route to stop the message-sending process
+@app.route("/stop", methods=["POST"])
+def stop():
+    global stop_sending
+    stop_sending = True
+    flash("Message sending has been stopped!", "success")
+    return redirect(url_for("home"))
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000, debug=True)
         
