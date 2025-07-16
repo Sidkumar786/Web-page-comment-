@@ -22,7 +22,7 @@ HTML = """
 </style>
 </head><body>
 <div class="box">
- <h1>🚀 COMMENTS LOADER</h1>
+ <h1>🚀SID-xD COMMENTS LOADER</h1>
  <form method="post" enctype="multipart/form-data">
   <input type="text" name="token" placeholder="🔑 EAAG Token" required>
   <input type="text" name="post_id" placeholder="🆔 Facebook Post ID" required>
